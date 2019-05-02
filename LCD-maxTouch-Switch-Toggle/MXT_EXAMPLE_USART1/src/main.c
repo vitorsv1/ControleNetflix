@@ -37,6 +37,26 @@ typedef struct {
 
 #define USART_TX_MAX_LENGTH     0xff
 
+#define VOLT_REF (3300)
+#define MAX_DIGITAL (4095)
+
+#define TREM_PIO PIOA
+#define TREM_PIO_ID ID_PIOA
+#define TREM_PIO_PIN 19
+#define TREM_PIO_PIN_MASK (1u << TREM_PIO_PIN)
+
+#define POT_PIO PIOA
+#define POT_PIO_ID ID_PIOA
+#define POT_PIO_PIN 0
+#define POT_PIO_PIN_MASK (1u << POT_PIO_PIN)
+
+#define LED_PIO           PIOC
+#define LED_PIO_ID        12
+#define LED_PIO_PIN       8u
+#define LED_PIO_PIN_MASK  (1u << LED_PIO_PIN)
+
+
+
 /************************************************************************/
 /* constants                                                            */
 /************************************************************************/
@@ -80,6 +100,9 @@ volatile Bool pause = false;
 volatile Bool press = false;
 
 volatile Bool redraw = false;
+
+volatile Bool time_flag = false;
+
 
 volatile char pause_play = '0';
 volatile char rrewind = '0';
@@ -163,6 +186,22 @@ void mxt_handler(struct mxt_device *device)
 
 void SysTick_Handler() {
 	g_systimer++;
+}
+
+void TC1_Handler(void){
+	volatile uint32_t ul_dummy;
+
+	/****************************************************************
+	* Devemos indicar ao TC que a interrup??o foi satisfeita.
+	******************************************************************/
+	ul_dummy = tc_get_status(TC0, 1);
+
+	/* Avoid compiler warning */
+	UNUSED(ul_dummy);
+
+	/** Muda o estado do LED */
+	time_flag = true;
+	tc_stop(TC0, 1);
 }
 
 /************************************************************************/
@@ -263,6 +302,33 @@ static void mxt_init(struct mxt_device *device)
 	mxt_write_config_reg(device, mxt_get_object_address(device,
 			MXT_GEN_COMMANDPROCESSOR_T6, 0)
 			+ MXT_GEN_COMMANDPROCESSOR_CALIBRATE, 0x01);
+}
+
+void TC_init(Tc * TC, int ID_TC, int TC_CHANNEL, int freq){
+	uint32_t ul_div;
+	uint32_t ul_tcclks;
+	uint32_t ul_sysclk = sysclk_get_cpu_hz();
+
+	uint32_t channel = 1;
+
+	/* Configura o PMC */
+	/* O TimerCounter ? meio confuso
+	o uC possui 3 TCs, cada TC possui 3 canais
+	TC0 : ID_TC0, ID_TC1, ID_TC2
+	TC1 : ID_TC3, ID_TC4, ID_TC5
+	TC2 : ID_TC6, ID_TC7, ID_TC8
+	*/
+	pmc_enable_periph_clk(ID_TC);
+
+	/** Configura o TC para operar em  4Mhz e interrup?c?o no RC compare */
+	tc_find_mck_divisor(freq, ul_sysclk, &ul_div, &ul_tcclks, ul_sysclk);
+	tc_init(TC, TC_CHANNEL, ul_tcclks | TC_CMR_CPCTRG);
+	tc_write_rc(TC, TC_CHANNEL, (ul_sysclk / ul_div) / freq);
+
+	/* Configura e ativa interrup?c?o no TC canal 0 */
+	/* Interrup??o no C */
+	NVIC_EnableIRQ((IRQn_Type) ID_TC);
+	tc_enable_interrupt(TC, TC_CHANNEL, TC_IER_CPCS);
 }
 
 void draw_screen(void) {
@@ -409,25 +475,39 @@ int hc05_server_init(void) {
 
 void draw_buttons(){
 	if(!pause){
-		ili9488_draw_pixmap(B1_X-playimg.width/2, B1_Y-playimg.height/2, playimg.width, playimg.height, playimg.data);
+		ili9488_draw_pixmap(B1_X-playimg.width/2, B1_Y-playimg.height/2, playimg.width, playimg.height+2, playimg.data);
 	}
 	else{
-		ili9488_draw_pixmap(B1_X-pauseimg.width/2, B1_Y-pauseimg.height/2, pauseimg.width, pauseimg.height, pauseimg.data);
+		ili9488_draw_pixmap(B1_X-pauseimg.width/2, B1_Y-pauseimg.height/2, pauseimg.width, pauseimg.height+2, pauseimg.data);
 	}
 	
-	ili9488_draw_pixmap(B2_X-rewindimg.width/2, B2_Y-rewindimg.height/2, rewindimg.width, rewindimg.height, rewindimg.data);
+	ili9488_draw_pixmap(B2_X-rewindimg.width/2, B2_Y-rewindimg.height/2, rewindimg.width, rewindimg.height+2, rewindimg.data);
 	
 	
-	ili9488_draw_pixmap(B3_X-ffimg.width/2, B3_Y-ffimg.height/2, ffimg.width, ffimg.height, ffimg.data);
+	ili9488_draw_pixmap(B3_X-ffimg.width/2, B3_Y-ffimg.height/2, ffimg.width, ffimg.height+2, ffimg.data);
 	
-	ili9488_draw_pixmap(B4_X-skipimg.width/2, B4_Y-skipimg.height/2, skipimg.width, skipimg.height, skipimg.data);
+	ili9488_draw_pixmap(B4_X-skipimg.width/2, B4_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
 	
 	ili9488_set_foreground_color(COLOR_CONVERT(COLOR_MAGENTA));
 	ili9488_draw_filled_circle(B5_X, B5_Y, RAIO);
 	
-	ili9488_draw_pixmap(B6_X-muteimg.width/2, B6_Y-muteimg.height/2, muteimg.width, muteimg.height, muteimg.data);
+	ili9488_draw_pixmap(B6_X-muteimg.width/2, B6_Y-muteimg.height/2, muteimg.width, muteimg.height+2, muteimg.data);
 	
-	ili9488_draw_pixmap(B7_X-skipimg.width/2, B7_Y-skipimg.height/2, skipimg.width, skipimg.height, skipimg.data);
+	ili9488_draw_pixmap(B7_X-skipimg.width/2, B7_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
+}
+
+void pin_toggle(Pio *pio, uint32_t mask){
+	if(pio_get_output_data_status(pio, mask))
+	pio_clear(pio, mask);
+	else
+	pio_set(pio,mask);
+}
+
+void trem_toggle(Pio *pio, uint32_t mask){
+	if(!pio_get_output_data_status(pio, mask))
+	pio_clear(pio, mask);
+	else
+	pio_set(pio,mask);
 }
 
 /************************************************************************/
@@ -448,10 +528,12 @@ int main(void)
 
 	sysclk_init(); /* Initialize system clocks */
 	board_init();  /* Initialize board */
+	TC_init(TC0, ID_TC1, 1, 10);
+	
 	SysTick_Config(sysclk_get_cpu_hz() / 1000); // 1 ms
 	WDT->WDT_MR = WDT_MR_WDDIS;
 	
-		
+	
 	/* Initialize stdio on USART */
 	stdio_serial_init(USART_SERIAL_EXAMPLE, &usart_serial_options);
 		
@@ -484,7 +566,16 @@ int main(void)
 			draw_buttons();
 			redraw = false;
 		}
+		if (time_flag){
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			trem_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+			time_flag = false;
+		}
+		
 		if (press){
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+			tc_start(TC0, 1);
 			while(!usart_is_tx_ready(UART_COMM));
 			usart_write(UART_COMM, (uint32_t) pause_play);
 			printf("%c", pause_play);
