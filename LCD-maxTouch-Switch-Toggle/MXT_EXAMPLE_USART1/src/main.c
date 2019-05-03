@@ -42,7 +42,7 @@ typedef struct {
 
 #define TREM_PIO PIOA
 #define TREM_PIO_ID ID_PIOA
-#define TREM_PIO_PIN 19
+#define TREM_PIO_PIN 19                                                                                                                                                  
 #define TREM_PIO_PIN_MASK (1u << TREM_PIO_PIN)
 
 #define POT_PIO PIOA
@@ -51,7 +51,7 @@ typedef struct {
 #define POT_PIO_PIN_MASK (1u << POT_PIO_PIN)
 
 #define LED_PIO           PIOC
-#define LED_PIO_ID        12
+#define LED_PIO_ID        ID_PIOC
 #define LED_PIO_PIN       8u
 #define LED_PIO_PIN_MASK  (1u << LED_PIO_PIN)
 
@@ -111,7 +111,12 @@ volatile char skip = '0';
 volatile char fullscreen = '0';
 volatile char mute = '0';
 volatile char nextep = '0';
-	
+
+volatile bool g_is_conversion_done_pot = false;
+volatile uint32_t g_ul_value_pot = 0;
+
+#define AFEC_CHANNEL_POT 5
+
 /************************************************************************/
 /* PROTOTYPES                                                           */
 /************************************************************************/
@@ -135,6 +140,99 @@ int hc05_server_init();
 /************************************************************************/
 /* Handlers                                                             */
 /************************************************************************/
+void pin_toggle(Pio *pio, uint32_t mask){
+	if(pio_get_output_data_status(pio, mask))
+	pio_clear(pio, mask);
+	else
+	pio_set(pio,mask);
+}
+static int32_t convert_adc_to_temp(int32_t ADC_value){
+
+  int32_t ul_vol;
+
+  /*
+   * converte bits -> tensão (Volts)
+   */
+	ul_vol = ADC_value * 100 / 4096;
+
+  /*
+   * According to datasheet, The output voltage VT = 0.72V at 27C
+   * and the temperature slope dVT/dT = 2.33 mV/C
+   */
+  //ul_temp = (ul_vol - 720)  * 100 / 233 + 27;
+  return(ul_vol);
+}
+/**
+ * \brief AFEC interrupt callback function.
+ */
+static void AFEC_Pot_callback(void)
+{
+	g_ul_value_pot = afec_channel_get_value(AFEC0, AFEC_CHANNEL_POT);
+	g_is_conversion_done_pot = true;
+}
+
+static void config_ADC_POT(void){
+/*************************************
+   * Ativa e configura AFEC
+   *************************************/
+  /* Ativa AFEC - 0 */
+	afec_enable(AFEC0);
+
+	/* struct de configuracao do AFEC */
+	struct afec_config afec_cfg;
+
+	/* Carrega parametros padrao */
+	afec_get_config_defaults(&afec_cfg);
+
+	/* Configura AFEC */
+	afec_init(AFEC0, &afec_cfg);
+
+	/* Configura trigger por software */
+	afec_set_trigger(AFEC0, AFEC_TRIG_SW);
+
+	/* configura call back */
+	afec_set_callback(AFEC0, AFEC_INTERRUPT_EOC_5,	AFEC_Pot_callback, 1);
+
+	/*** Configuracao específica do canal AFEC ***/
+	struct afec_ch_config afec_ch_cfg;
+	afec_ch_get_config_defaults(&afec_ch_cfg);
+	afec_ch_cfg.gain = AFEC_GAINVALUE_0;
+	afec_ch_set_config(AFEC0, AFEC_CHANNEL_POT, &afec_ch_cfg);
+
+	/*
+	* Calibracao:
+	* Because the internal ADC offset is 0x200, it should cancel it and shift
+	 down to 0.
+	 */
+	afec_channel_set_analog_offset(AFEC0, AFEC_CHANNEL_POT, 0x200);
+
+	/***  Configura sensor de temperatura ***/
+	struct afec_temp_sensor_config afec_temp_sensor_cfg;
+
+	afec_temp_sensor_get_config_defaults(&afec_temp_sensor_cfg);
+	afec_temp_sensor_set_config(AFEC0, &afec_temp_sensor_cfg);
+
+	/* Selecina canal e inicializa conversão */
+	afec_channel_enable(AFEC0, AFEC_CHANNEL_POT);
+}
+/**
+*  Interrupt handler for TC1 interrupt.
+*/
+void TC2_Handler(void){
+	volatile uint32_t ul_dummy;
+
+	/****************************************************************
+	* Devemos indicar ao TC que a interrup??o foi satisfeita.
+	******************************************************************/
+	ul_dummy = tc_get_status(TC0, 2);
+
+	/* Avoid compiler warning */
+	UNUSED(ul_dummy);
+	afec_channel_enable(AFEC0, AFEC_CHANNEL_POT);
+
+	afec_start_software_conversion(AFEC0);
+}
+
 
 void mxt_handler(struct mxt_device *device)
 {
@@ -202,6 +300,7 @@ void TC1_Handler(void){
 	/** Muda o estado do LED */
 	time_flag = true;
 	tc_stop(TC0, 1);
+	//pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
 }
 
 /************************************************************************/
@@ -351,6 +450,9 @@ uint32_t convert_axis_system_y(uint32_t touch_x) {
 void update_screen(uint32_t tx, uint32_t ty) {	
 	if(tx >= B1_X-RAIO && tx <= B1_X+RAIO) {
 		if(ty >= B1_Y-RAIO && ty <= B1_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			if(!pause){
 				pause = true;
 			}
@@ -364,6 +466,9 @@ void update_screen(uint32_t tx, uint32_t ty) {
 	
 	if(tx >= B2_X-RAIO && tx <= B2_X+RAIO) {
 		if(ty >= B2_Y-RAIO && ty <= B2_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			rrewind = '1';
 			redraw = true;
 		}
@@ -371,6 +476,9 @@ void update_screen(uint32_t tx, uint32_t ty) {
 	
 	if(tx >= B3_X-RAIO && tx <= B3_X+RAIO) {
 		if(ty >= B3_Y-RAIO && ty <= B3_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			ff = '1';
 			redraw = true;
 		}
@@ -378,6 +486,9 @@ void update_screen(uint32_t tx, uint32_t ty) {
 	
 	if(tx >= B4_X-RAIO && tx <= B4_X+RAIO) {
 		if(ty >= B4_Y-RAIO && ty <= B4_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			skip = '1';
 			redraw = true;
 		}
@@ -385,18 +496,27 @@ void update_screen(uint32_t tx, uint32_t ty) {
 	
 	if(tx >= B5_X-RAIO && tx <= B5_X+RAIO) {
 		if(ty >= B5_Y-RAIO && ty <= B5_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			fullscreen = '1';
 			redraw = true;
 		}
 	}
 	if(tx >= B6_X-RAIO && tx <= B6_X+RAIO) {
 		if(ty >= B6_Y-RAIO && ty <= B6_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			mute = '1';
 			redraw = true;
 		}
 	}
 	if(tx >= B7_X-RAIO && tx <= B7_X+RAIO) {
 		if(ty >= B7_Y-RAIO && ty <= B7_Y+RAIO) {
+			tc_start(TC0, 1);
+			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			nextep = '1';
 			redraw = true;
 		}
@@ -496,12 +616,7 @@ void draw_buttons(){
 	ili9488_draw_pixmap(B7_X-skipimg.width/2, B7_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
 }
 
-void pin_toggle(Pio *pio, uint32_t mask){
-	if(pio_get_output_data_status(pio, mask))
-	pio_clear(pio, mask);
-	else
-	pio_set(pio,mask);
-}
+
 
 void trem_toggle(Pio *pio, uint32_t mask){
 	if(!pio_get_output_data_status(pio, mask))
@@ -530,6 +645,9 @@ int main(void)
 	board_init();  /* Initialize board */
 	TC_init(TC0, ID_TC1, 1, 10);
 	
+	TC_init(TC0, ID_TC2, 2, 10);
+	tc_start(TC0, 2);
+
 	SysTick_Config(sysclk_get_cpu_hz() / 1000); // 1 ms
 	WDT->WDT_MR = WDT_MR_WDDIS;
 	
@@ -550,8 +668,17 @@ int main(void)
 	
 	/* Initialize the mXT touch device */
 	mxt_init(&device);
+	pmc_enable_periph_clk(LED_PIO_ID);
+	pio_set_output(LED_PIO, LED_PIO_PIN_MASK, 1, 0, 0 );
+	
+	pmc_enable_periph_clk(TREM_PIO_ID);
+	pio_set_output(TREM_PIO, TREM_PIO_PIN_MASK, 0, 0, 0 );
+	
+	
+	config_ADC_POT();
+	/* incializa conversão ADC */
+	afec_start_software_conversion(AFEC0);
 
-			
 	char eof = 'X';
 	char buffer[1024];
 	
@@ -568,14 +695,14 @@ int main(void)
 		}
 		if (time_flag){
 			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			trem_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
 			time_flag = false;
 		}
 		
 		if (press){
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			tc_start(TC0, 1);
+			const pot_val = convert_adc_to_temp(g_ul_value_pot);
+			
+			
 			while(!usart_is_tx_ready(UART_COMM));
 			usart_write(UART_COMM, (uint32_t) pause_play);
 			printf("%c", pause_play);
@@ -594,10 +721,20 @@ int main(void)
 			while(!usart_is_tx_ready(UART_COMM));
 			usart_write(UART_COMM,  (uint32_t) mute);
 			printf("%c", mute);
+			//if (pot_val < 10){
+				//while(!usart_is_tx_ready(UART_COMM));
+			 	//usart_write(UART_COMM,  (uint32_t) 0);
+			 	//printf("%d",'0') ;
+			//}
+			while(!usart_is_tx_ready(UART_COMM));
+ 			usart_write(UART_COMM,  (uint32_t) pot_val);
+ 			printf("%d",pot_val) ;
 			while(!usart_is_tx_ready(UART_COMM));
 			usart_write(UART_COMM,  (uint32_t)  eof);
 			printf("%c", eof);
+
 			press = false;
+			
 		}
 		
 		
