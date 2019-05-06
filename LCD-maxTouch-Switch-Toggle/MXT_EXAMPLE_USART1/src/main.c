@@ -14,6 +14,7 @@ typedef struct {
  } tImage;
  
 #include "img/ffimg.h"
+#include "img/fullimg.h"
 #include "img/muteimg.h"
 #include "img/pauseimg.h"
 #include "img/playimg.h"
@@ -84,11 +85,9 @@ const uint32_t B4_Y = 280;
 const uint32_t B5_X = ILI9488_LCD_WIDTH*2/3+15;
 const uint32_t B5_Y = 280;
 
-const uint32_t B6_X = ILI9488_LCD_WIDTH/3-15;
+const uint32_t B6_X = ILI9488_LCD_WIDTH/2;
 const uint32_t B6_Y = 390;
 
-const uint32_t B7_X = ILI9488_LCD_WIDTH*2/3+15;
-const uint32_t B7_Y = 390;
 
 /************************************************************************/
 /* VAR globais                                                          */
@@ -98,6 +97,7 @@ volatile long g_systimer = 0;
 volatile uint32_t last_status = 0;
 volatile Bool pause = false;
 volatile Bool press = false;
+volatile Bool cd = false;
 
 volatile Bool redraw = false;
 
@@ -110,7 +110,6 @@ volatile char ff = '0';
 volatile char skip = '0';
 volatile char fullscreen = '0';
 volatile char mute = '0';
-volatile char nextep = '0';
 
 volatile bool g_is_conversion_done_pot = false;
 volatile uint32_t g_ul_value_pot = 0;
@@ -146,6 +145,7 @@ void pin_toggle(Pio *pio, uint32_t mask){
 	else
 	pio_set(pio,mask);
 }
+
 static int32_t convert_adc_to_temp(int32_t ADC_value){
 
   int32_t ul_vol;
@@ -162,9 +162,7 @@ static int32_t convert_adc_to_temp(int32_t ADC_value){
   //ul_temp = (ul_vol - 720)  * 100 / 233 + 27;
   return(ul_vol);
 }
-/**
- * \brief AFEC interrupt callback function.
- */
+
 static void AFEC_Pot_callback(void)
 {
 	g_ul_value_pot = afec_channel_get_value(AFEC0, AFEC_CHANNEL_POT);
@@ -300,6 +298,7 @@ void TC1_Handler(void){
 	/** Muda o estado do LED */
 	time_flag = true;
 	tc_stop(TC0, 1);
+	cd = false;
 	//pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
 }
 
@@ -447,81 +446,80 @@ uint32_t convert_axis_system_y(uint32_t touch_x) {
 	return ILI9488_LCD_HEIGHT*touch_x/4096;
 }
 
-void update_screen(uint32_t tx, uint32_t ty) {	
-	if(tx >= B1_X-RAIO && tx <= B1_X+RAIO) {
-		if(ty >= B1_Y-RAIO && ty <= B1_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			if(!pause){
-				pause = true;
+void update_screen(uint32_t tx, uint32_t ty) {
+	if(!cd){
+		if(tx >= B1_X-RAIO && tx <= B1_X+RAIO) {
+			if(ty >= B1_Y-RAIO && ty <= B1_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				if(!pause){
+					pause = true;
+				}
+				else{
+					pause = false;
+				}
+				pause_play = '1';
+				redraw = true;
 			}
-			else{
-				pause = false;
+		}
+		
+		if(tx >= B2_X-RAIO && tx <= B2_X+RAIO) {
+			if(ty >= B2_Y-RAIO && ty <= B2_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				rrewind = '1';
+				redraw = true;
 			}
-			pause_play = '1';
-			redraw = true;
 		}
-	}
-	
-	if(tx >= B2_X-RAIO && tx <= B2_X+RAIO) {
-		if(ty >= B2_Y-RAIO && ty <= B2_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			rrewind = '1';
-			redraw = true;
+		
+		if(tx >= B3_X-RAIO && tx <= B3_X+RAIO) {
+			if(ty >= B3_Y-RAIO && ty <= B3_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				ff = '1';
+				redraw = true;
+			}
 		}
-	}
-	
-	if(tx >= B3_X-RAIO && tx <= B3_X+RAIO) {
-		if(ty >= B3_Y-RAIO && ty <= B3_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			ff = '1';
-			redraw = true;
+		
+		if(tx >= B4_X-RAIO && tx <= B4_X+RAIO) {
+			if(ty >= B4_Y-RAIO && ty <= B4_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				mute = '1';
+				redraw = true;
+			}
 		}
-	}
-	
-	if(tx >= B4_X-RAIO && tx <= B4_X+RAIO) {
-		if(ty >= B4_Y-RAIO && ty <= B4_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			skip = '1';
-			redraw = true;
+		
+		if(tx >= B5_X-RAIO && tx <= B5_X+RAIO) {
+			if(ty >= B5_Y-RAIO && ty <= B5_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				fullscreen = '1';
+				redraw = true;
+			}
 		}
-	}
-	
-	if(tx >= B5_X-RAIO && tx <= B5_X+RAIO) {
-		if(ty >= B5_Y-RAIO && ty <= B5_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			fullscreen = '1';
-			redraw = true;
+		if(tx >= B6_X-RAIO && tx <= B6_X+RAIO) {
+			if(ty >= B6_Y-RAIO && ty <= B6_Y+RAIO) {
+				tc_start(TC0, 1);
+				cd = true;
+				pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
+				pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
+				skip = '1';
+				redraw = true;
+			}
 		}
+		
 	}
-	if(tx >= B6_X-RAIO && tx <= B6_X+RAIO) {
-		if(ty >= B6_Y-RAIO && ty <= B6_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			mute = '1';
-			redraw = true;
-		}
-	}
-	if(tx >= B7_X-RAIO && tx <= B7_X+RAIO) {
-		if(ty >= B7_Y-RAIO && ty <= B7_Y+RAIO) {
-			tc_start(TC0, 1);
-			pin_toggle(LED_PIO, LED_PIO_PIN_MASK);
-			pin_toggle(TREM_PIO, TREM_PIO_PIN_MASK);
-			nextep = '1';
-			redraw = true;
-		}
-	}
-	
 }
 
 void config_console(void) {
@@ -606,17 +604,12 @@ void draw_buttons(){
 	
 	ili9488_draw_pixmap(B3_X-ffimg.width/2, B3_Y-ffimg.height/2, ffimg.width, ffimg.height+2, ffimg.data);
 	
-	ili9488_draw_pixmap(B4_X-skipimg.width/2, B4_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
+	ili9488_draw_pixmap(B4_X-muteimg.width/2, B4_Y-muteimg.height/2, muteimg.width, muteimg.height+2, muteimg.data);
 	
-	ili9488_set_foreground_color(COLOR_CONVERT(COLOR_MAGENTA));
-	ili9488_draw_filled_circle(B5_X, B5_Y, RAIO);
+	ili9488_draw_pixmap(B5_X-fullimg.width/2, B5_Y-fullimg.height/2, fullimg.width, fullimg.height+2, fullimg.data);
 	
-	ili9488_draw_pixmap(B6_X-muteimg.width/2, B6_Y-muteimg.height/2, muteimg.width, muteimg.height+2, muteimg.data);
-	
-	ili9488_draw_pixmap(B7_X-skipimg.width/2, B7_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
+	ili9488_draw_pixmap(B6_X-skipimg.width/2, B6_Y-skipimg.height/2, skipimg.width, skipimg.height+2, skipimg.data);
 }
-
-
 
 void trem_toggle(Pio *pio, uint32_t mask){
 	if(!pio_get_output_data_status(pio, mask))
@@ -646,7 +639,6 @@ int main(void)
 	TC_init(TC0, ID_TC1, 1, 10);
 	
 	TC_init(TC0, ID_TC2, 2, 10);
-	tc_start(TC0, 2);
 
 	SysTick_Config(sysclk_get_cpu_hz() / 1000); // 1 ms
 	WDT->WDT_MR = WDT_MR_WDDIS;
@@ -745,7 +737,6 @@ int main(void)
 		skip = '0';
 		fullscreen = '0';
 		mute = '0';
-		nextep = '0';
 	}
 
 	return 0;
