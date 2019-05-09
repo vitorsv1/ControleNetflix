@@ -46,9 +46,9 @@ typedef struct {
 #define TREM_PIO_PIN 19                                                                                                                                                  
 #define TREM_PIO_PIN_MASK (1u << TREM_PIO_PIN)
 
-#define POT_PIO PIOA
-#define POT_PIO_ID ID_PIOA
-#define POT_PIO_PIN 0
+#define POT_PIO PIOB
+#define POT_PIO_ID ID_PIOB
+#define POT_PIO_PIN 2
 #define POT_PIO_PIN_MASK (1u << POT_PIO_PIN)
 
 #define LED_PIO           PIOC
@@ -638,8 +638,9 @@ int main(void)
 	board_init();  /* Initialize board */
 	TC_init(TC0, ID_TC1, 1, 10);
 	
-	TC_init(TC0, ID_TC2, 2, 10);
-
+	TC_init(TC0, ID_TC2, 2, 1);
+    tc_start(TC0, 2);
+	
 	SysTick_Config(sysclk_get_cpu_hz() / 1000); // 1 ms
 	WDT->WDT_MR = WDT_MR_WDDIS;
 	
@@ -691,9 +692,8 @@ int main(void)
 			time_flag = false;
 		}
 		
-		if (press){
-			const pot_val = convert_adc_to_temp(g_ul_value_pot);
-			
+		if (press || g_is_conversion_done_pot){
+			const pot_val = convert_adc_to_temp(g_ul_value_pot);			
 			
 			while(!usart_is_tx_ready(UART_COMM));
 			usart_write(UART_COMM, (uint32_t) pause_play);
@@ -729,7 +729,8 @@ int main(void)
 			
 		}
 		
-		
+		g_is_conversion_done_pot = 0 ;
+
 		
 		pause_play = '0';
 		rrewind = '0';
